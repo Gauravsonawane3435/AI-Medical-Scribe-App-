@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ClinicalNote AI - Structured Clinical Note Generator</title>
+    <!-- Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <!-- FontAwesome for Premium Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Main Style -->
+    <link rel="stylesheet" href="/static/css/styles.css">
+</head>
+<body>
+    <div class="glass-bg"></div>
+    <div class="app-container">
+        <!-- TOP NAVIGATION BAR -->
+        <header class="app-header">
+            <div class="logo-area">
+                <div class="logo-icon">
+                    <i class="fa-solid fa-heart-pulse"></i>
+                </div>
+                <div class="logo-text">
+                    <h1>ClinicalNote <span>AI</span></h1>
+                    <p>Doctor-Patient Conversation to Structured EHR Note</p>
+                </div>
+            </div>
+            <div class="header-actions" style="display: flex; gap: 10px; align-items: center;">
+                <span class="status-badge warning hidden" id="demo-badge">
+                    <span class="status-dot"></span> Demo Mode
+                </span>
+                <span class="status-badge connected" id="api-status">
+                    <span class="status-dot"></span> API Server Ready
+                </span>
+            </div>
+        </header>
+
+        <!-- MAIN CONTENT AREA -->
+        <div class="main-layout">
+            
+            <!-- LEFT PANEL: SETTINGS & MODEL CONFIGURATION -->
+            <aside class="sidebar-panel">
+                <div class="panel-section">
+                    <h3><i class="fa-solid fa-sliders"></i> Configuration</h3>
+                    
+                    <div class="input-group">
+                        <label>AI Service Status</label>
+                        <div class="status-badge disconnected" id="ai-status" style="width: fit-content;">
+                            <span class="status-dot"></span> Checking configuration...
+                        </div>
+                    </div>
+
+                    <div class="input-group">
+                        <label for="asr-model-select">ASR Model (Audio Upload)</label>
+                        <select id="asr-model-select">
+                            <!-- Populated dynamically -->
+                        </select>
+                    </div>
+
+                    <div class="input-group">
+                        <label for="llm-model-select">Clinical Note LLM Model</label>
+                        <select id="llm-model-select">
+                            <!-- Populated dynamically -->
+                        </select>
+                    </div>
+
+                    <div class="input-group">
+                        <label for="specialty-select">Clinical Specialty</label>
+                        <select id="specialty-select">
+                            <!-- Populated dynamically from API -->
+                        </select>
+                    </div>
+
+                    <div class="input-group">
+                        <label for="dictation-lang-select">Dictation Language</label>
+                        <select id="dictation-lang-select">
+                            <option value="en-US">English (US)</option>
+                            <option value="es-ES">Spanish (Spain)</option>
+                            <option value="fr-FR">French (France)</option>
+                            <option value="de-DE">German (Germany)</option>
+                            <option value="it-IT">Italian (Italy)</option>
+                            <option value="pt-PT">Portuguese (Portugal)</option>
+                        </select>
+                    </div>
+
+                    <div class="input-group">
+                        <label for="output-mode-select">Output Mode</label>
+                        <select id="output-mode-select">
+                            <option value="transcript">Raw Transcript</option>
+                            <option value="structured" selected>Structured Clinical Note</option>
+                            <option value="custom">Free Text / Custom Prompt</option>
+                        </select>
+                    </div>
+
+                    <div class="input-group hidden" id="custom-prompt-group">
+                        <label for="custom-instruction">Custom Instruction</label>
+                        <textarea id="custom-instruction" class="prompt-textarea" rows="6" placeholder="Examples:
+• Generate a referral letter
+• Create a discharge summary
+• Summarize the consultation
+• Create a surgery report
+• Output as plain text"></textarea>
+                    </div>
+                </div>
+
+                <div class="panel-section">
+                    <div class="section-header-row">
+                        <h3>
+                            <i class="fa-solid fa-message"></i> System Prompt
+                            <span class="help-tooltip-trigger" title="Advanced users can customize AI behavior by modifying the system prompt instructions.">
+                                <i class="fa-solid fa-circle-question"></i>
+                            </span>
+                        </h3>
+                        <button class="text-btn" id="reset-prompt-btn"><i class="fa-solid fa-rotate-left"></i> Reset</button>
+                    </div>
+                    <p class="section-desc">Customize how the AI structures clinical notes. Modify the instructions to match different medical specialties or documentation workflows.</p>
+                    <div class="input-group">
+                        <textarea id="system-prompt" class="prompt-textarea" rows="12" placeholder="Enter system prompt guidelines..."></textarea>
+                        <span class="info-hint"><i class="fa-solid fa-circle-info"></i> Changes affect only future note generations.</span>
+                    </div>
+                </div>
+                
+                <div class="panel-footer">
+                    <p class="privacy-notice"><i class="fa-solid fa-shield-halved"></i> <strong>HIPAA & Privacy:</strong> Audio files are processed in-memory and are never stored on the server.</p>
+                </div>
+            </aside>
+
+            <!-- RIGHT PANELS: WORKSPACE -->
+            <main class="workspace-area">
+                
+                <!-- TRANSCRIPT WORKSPACE (LEFT SPLIT) -->
+                <section class="workspace-card" id="transcript-workspace">
+                    <div class="card-header">
+                        <h2><i class="fa-solid fa-microphone-lines"></i> Consultation Audio & Transcript</h2>
+                        <div class="header-toolbar">
+                            <button class="toolbar-btn text-danger" id="clear-transcript" title="Clear transcript"><i class="fa-solid fa-trash-can"></i></button>
+                        </div>
+                    </div>
+
+                    <!-- INPUT CONTROLS -->
+                    <div class="audio-input-tabs">
+                        <button class="tab-btn active" onclick="switchInputTab('live-tab')"><i class="fa-solid fa-microphone"></i> Live Dictation</button>
+                        <button class="tab-btn" onclick="switchInputTab('upload-tab')"><i class="fa-solid fa-file-arrow-up"></i> Upload Audio File</button>
+                    </div>
+
+                    <div class="tab-content" id="live-tab">
+                        <div class="dictation-panel">
+                            <div class="record-ring-container">
+                                <div class="pulse-ring" id="record-ring"></div>
+                                <button class="record-btn" id="record-button">
+                                    <i class="fa-solid fa-microphone" id="record-icon"></i>
+                                </button>
+                            </div>
+                            <div class="dictation-status">
+                                <span class="dictation-state" id="record-state">Click microphone to start live transcription</span>
+                                <div class="waveform" id="waveform">
+                                    <div class="bar"></div><div class="bar"></div><div class="bar"></div>
+                                    <div class="bar"></div><div class="bar"></div><div class="bar"></div>
+                                    <div class="bar"></div><div class="bar"></div><div class="bar"></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="tab-content hidden" id="upload-tab">
+                        <div class="drop-zone" id="drop-zone">
+                            <i class="fa-solid fa-cloud-arrow-up drop-icon"></i>
+                            <p class="drop-title">Drag & drop consultation audio</p>
+                            <p class="drop-subtitle">Supports MP3, WAV, M4A, FLAC, WEBM (Max 25MB)</p>
+                            <input type="file" id="audio-file-input" accept="audio/*" class="hidden">
+                            <button class="btn btn-secondary" onclick="document.getElementById('audio-file-input').click()">Browse Files</button>
+                        </div>
+                        <div class="upload-progress-container hidden" id="upload-progress-container">
+                            <div class="file-details">
+                                <span class="file-name" id="selected-file-name">audio.mp3</span>
+                                <span class="file-size" id="selected-file-size">0 MB</span>
+                            </div>
+                            <div class="progress-bar-wrapper">
+                                <div class="progress-bar" id="upload-progress-bar"></div>
+                            </div>
+                            <div class="upload-actions">
+                                <span class="upload-status-text" id="upload-status-text">Transcribing... Please wait</span>
+                                <button class="text-btn text-danger" id="cancel-upload"><i class="fa-solid fa-xmark"></i> Cancel</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- TRANSCRIPT EDITING AREA -->
+                    <div class="transcript-editor-container">
+                        <label for="transcript-text">Edit Raw Conversation Transcript</label>
+                        <textarea id="transcript-text" class="transcript-textarea" placeholder="Speak, upload audio, or paste doctor-patient conversation text directly here to edit before generating the clinical note..."></textarea>
+                    </div>
+
+                    <div class="workspace-action-row">
+                        <button class="btn btn-primary btn-full" id="generate-note-btn">
+                            <span class="btn-text">Generate Structured Clinical Note</span>
+                            <span class="spinner hidden" id="generate-spinner"><i class="fa-solid fa-circle-notch fa-spin"></i></span>
+                        </button>
+                    </div>
+                </section>
+
+                <!-- CLINICAL NOTE PREVIEW (RIGHT SPLIT) -->
+                <section class="workspace-card" id="note-workspace">
+                    <div class="card-header">
+                        <h2 id="note-workspace-title"><i class="fa-solid fa-file-medical"></i> Structured Clinical Note</h2>
+                        <div class="header-toolbar">
+                            <button class="toolbar-btn" id="copy-entire-note" title="Copy entire note to clipboard"><i class="fa-solid fa-copy"></i> Copy All</button>
+                            <div class="dropdown">
+                                <button class="toolbar-btn" id="export-btn" title="Export Note"><i class="fa-solid fa-download"></i> Export</button>
+                                <div class="dropdown-content">
+                                    <a href="#" onclick="exportNote('txt')"><i class="fa-solid fa-file-lines"></i> Text File (.txt)</a>
+                                    <a href="#" onclick="exportNote('md')"><i class="fa-solid fa-file-code"></i> Markdown (.md)</a>
+                                    <a href="#" onclick="exportNote('json')"><i class="fa-solid fa-code"></i> JSON Data (.json)</a>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="note-sections-container hidden" id="custom-output-container">
+                        <!-- Custom Output -->
+                        <div class="note-section-group" style="display: flex; flex-direction: column; height: 100%;">
+                            <div class="section-label">
+                                <span id="custom-output-label">Output</span>
+                                <span class="section-title" id="custom-output-title">Custom Response</span>
+                            </div>
+                            <textarea id="section-custom-output" class="section-textarea" style="flex-grow: 1; min-height: 450px;" placeholder="[Custom generated response will appear here...]"></textarea>
+                        </div>
+                    </div>
+
+                    <div class="note-sections-container" id="note-sections-container">
+                        <!-- Chief Complaint -->
+                        <div class="note-section-group">
+                            <div class="section-label">
+                                <span>CC</span>
+                                <span class="section-title">Chief Complaint</span>
+                            </div>
+                            <textarea id="section-chief-complaint" class="section-textarea" rows="2" placeholder="[Brief primary reason for the patient's visit...]"></textarea>
+                        </div>
+
+                        <!-- HPI -->
+                        <div class="note-section-group">
+                            <div class="section-label">
+                                <span>HPI</span>
+                                <span class="section-title">History of Present Illness</span>
+                            </div>
+                            <textarea id="section-hpi" class="section-textarea" rows="4" placeholder="[History of Present Illness: detailed symptoms, onset, timeline, severity...]"></textarea>
+                        </div>
+
+                        <!-- Assessment -->
+                        <div class="note-section-group">
+                            <div class="section-label">
+                                <span>Assessment</span>
+                                <span class="section-title">Clinical Impression & Diagnosis</span>
+                            </div>
+                            <textarea id="section-assessment" class="section-textarea" rows="3" placeholder="[Clinical Impression / Diagnosis or differential diagnoses discussed...]"></textarea>
+                        </div>
+
+                        <!-- Plan -->
+                        <div class="note-section-group">
+                            <div class="section-label">
+                                <span>Plan</span>
+                                <span class="section-title">Management Plan</span>
+                            </div>
+                            <textarea id="section-plan" class="section-textarea" rows="4" placeholder="[Management plan, patient counseling, instructions...]"></textarea>
+                        </div>
+
+                        <!-- Prescription -->
+                        <div class="note-section-group">
+                            <div class="section-label">
+                                <span>Prescription</span>
+                                <span class="section-title">Medications</span>
+                            </div>
+                            <textarea id="section-prescription" class="section-textarea" rows="3" placeholder="[Name of medication, dosage, frequency, duration, special instructions...]"></textarea>
+                        </div>
+
+                        <!-- Recommended Tests -->
+                        <div class="note-section-group">
+                            <div class="section-label">
+                                <span>Recommended Tests</span>
+                                <span class="section-title">Labs & Imaging</span>
+                            </div>
+                            <textarea id="section-recommended-tests" class="section-textarea" rows="3" placeholder="[Lab tests, imaging, or referrals...]"></textarea>
+                        </div>
+
+                        <!-- Follow-up -->
+                        <div class="note-section-group">
+                            <div class="section-label">
+                                <span>Follow-up</span>
+                                <span class="section-title">Next Visit</span>
+                            </div>
+                            <textarea id="section-follow-up" class="section-textarea" rows="2" placeholder="[Follow-up instructions or scheduling...]"></textarea>
+                        </div>
+                    </div>
+                </section>
+                
+            </main>
+        </div>
+    </div>
+
+    <!-- Toast Notification Container -->
+    <div id="toast-container"></div>
+
+    <script src="/static/js/app.js"></script>
+</body>
+</html>
