@@ -58,18 +58,25 @@ class TranscriptionService:
         
         # Detect and log correct audio MIME Type
         mime_type = get_audio_mime_type(content_type, filename)
-        logger.info(f"Transcribing audio ({mime_type}) using Hugging Face model: {model_id}")
+        logger.info(f"[Backend] Processing ASR bytes: filename='{filename}', mime_type='{mime_type}', model='{model_id}'")
+        
+        # Hugging Face serverless router rejects some non-standard audio MIME types (like audio/mp4, audio/m4a, audio/aac).
+        # We map these to application/octet-stream to allow Whisper's backend to decode them from container headers.
+        hf_mime_type = mime_type
+        if mime_type in ("audio/mp4", "audio/m4a", "audio/aac", "audio/x-caf", "audio/caf", "audio/x-m4a"):
+            hf_mime_type = "application/octet-stream"
+            logger.info(f"[Backend] Mapping MIME type '{mime_type}' to '{hf_mime_type}' for Hugging Face compatibility.")
 
         try:
             # Set the Content-Type header in the constructor to avoid None type rejection
             client = InferenceClient(
                 token=token,
                 base_url="https://router.huggingface.co/hf-inference",
-                headers={"Content-Type": mime_type}
+                headers={"Content-Type": hf_mime_type}
             )
             # Build full URL to bypass api-inference.huggingface.co DNS resolution error
             model_url = f"https://router.huggingface.co/hf-inference/models/{model_id}"
-            logger.info(f"Connecting to: {model_url}")
+            logger.info(f"[Backend] Connecting to: {model_url}")
             response = client.automatic_speech_recognition(audio_bytes, model=model_url)
             
             # The ASR response is usually a dictionary with {"text": "..."}
@@ -82,18 +89,11 @@ class TranscriptionService:
                 
         except HfHubHTTPError as e:
             logger.error(f"Hugging Face Inference API error: {e}")
-            if e.response is not None and e.response.status_code in (401, 403):
-                if "Inference Providers" in str(e) or "permissions" in str(e):
-                    raise RuntimeError(
-                        "Your Hugging Face token is missing the 'Inference Providers' permission. "
-                        "Please go to your Hugging Face settings -> Access Tokens (https://huggingface.co/settings/tokens), "
-                        "edit your token, check the 'Inference Providers' permission box, and save."
-                    )
-            if "Model" in str(e) and "is currently loading" in str(e):
-                raise RuntimeError(
-                    "The transcription model is currently loading on Hugging Face. "
-                    "Please wait a minute and try again."
-                )
+            if e.response is not None:
+                logger.error(f"[Backend] HF Response Status Code: {e.response.status_code}")
+                logger.error(f"[Backend] HF Response Headers: {dict(e.response.headers)}")
+                logger.error(f"[Backend] HF Response Text: {e.response.text}")
+                raise RuntimeError(f"Hugging Face API error (status {e.response.status_code}): {e.response.text}")
             raise RuntimeError(f"Hugging Face Hub error: {e.server_message or str(e)}")
         except Exception as e:
             logger.error(f"Unexpected transcription error: {e}")

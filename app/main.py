@@ -89,20 +89,23 @@ async def transcribe_audio(
 ):
     """
     Transcribes uploaded audio files in memory.
-    Supports MP3, WAV, M4A, FLAC, WEBM.
+    Supports MP3, WAV, M4A, MP4, FLAC, WEBM, AAC, OGG.
     No permanent storage is used.
     """
     filename = file.filename or ""
     content_type = file.content_type or ""
+    ext = os.path.splitext(filename)[1].lower()
+    
+    logger.info(f"[Backend] Received transcription request. Filename: '{filename}', content_type: '{content_type}', extension: '{ext}', model: '{model_key}'")
     
     # Check if format is supported
-    ext = os.path.splitext(filename)[1].lower()
-    supported_extensions = {".mp3", ".wav", ".m4a", ".flac", ".webm", ".ogg"}
+    supported_extensions = {".mp3", ".wav", ".m4a", ".mp4", ".flac", ".webm", ".ogg", ".aac"}
     
     if not (content_type.startswith("audio/") or ext in supported_extensions):
+        logger.warning(f"[Backend] File format rejected: ext='{ext}', content_type='{content_type}'")
         raise HTTPException(
             status_code=400,
-            detail=f"Uploaded file type is not a supported audio format. Supported formats: MP3, WAV, M4A, FLAC, WEBM."
+            detail=f"Uploaded file type is not a supported audio format. Supported formats: MP3, WAV, M4A, MP4, FLAC, WEBM, AAC, OGG."
         )
         
     try:
@@ -120,6 +123,7 @@ async def transcribe_audio(
         )
         return {"transcript": transcript}
     except ValueError as e:
+        logger.error(f"[Backend] ValueError during transcription: {e}")
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.exception("An error occurred during audio transcription:")
@@ -129,7 +133,7 @@ async def transcribe_audio(
                 status_code=429,
                 detail="Rate limit exceeded: Too many requests. Please wait a minute and try again, or configure a custom Hugging Face Access Token in the Settings."
             )
-        raise HTTPException(status_code=500, detail="Audio transcription failed. Please try again.")
+        raise HTTPException(status_code=500, detail=f"Audio transcription failed: {err_msg}")
 
 # API Route to generate structured clinical note
 @app.post("/api/generate-note")
