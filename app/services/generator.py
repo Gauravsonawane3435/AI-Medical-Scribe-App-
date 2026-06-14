@@ -1,5 +1,6 @@
 import logging
 import re
+import time
 from typing import Optional, Dict
 from huggingface_hub import InferenceClient
 from huggingface_hub.utils import HfHubHTTPError
@@ -169,12 +170,37 @@ class NoteGeneratorService:
             ]
             
             logger.info(f"Connecting to: https://router.huggingface.co/v1/chat/completions (model: {model_id})")
-            response = client.chat_completion(
-                model=model_id,
-                messages=messages,
-                max_tokens=1500,
-                temperature=0.1,  # Low temperature for deterministic clinical notes
-            )
+            
+            # Retry loop with exponential backoff for 429 rate limit errors
+            max_retries = 3
+            backoff_factor = 2
+            base_delay = 1.0  # seconds
+            
+            response = None
+            for attempt in range(max_retries + 1):
+                try:
+                    response = client.chat_completion(
+                        model=model_id,
+                        messages=messages,
+                        max_tokens=1500,
+                        temperature=0.1,  # Low temperature for deterministic clinical notes
+                    )
+                    break # Success!
+                except HfHubHTTPError as e:
+                    is_rate_limit = False
+                    if e.response is not None and e.response.status_code == 429:
+                        is_rate_limit = True
+                    elif "429" in str(e) or "too many requests" in str(e).lower() or "rate limit" in str(e).lower():
+                        is_rate_limit = True
+                        
+                    if is_rate_limit and attempt < max_retries:
+                        delay = base_delay * (backoff_factor ** attempt)
+                        logger.warning(f"Rate limit (429) hit during note generation. Retrying in {delay:.2f}s... (Attempt {attempt+1}/{max_retries})")
+                        time.sleep(delay)
+                    else:
+                        raise e
+                except Exception as e:
+                    raise e
             
             raw_content = response.choices[0].message.content
             

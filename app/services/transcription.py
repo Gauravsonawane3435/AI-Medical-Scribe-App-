@@ -1,6 +1,7 @@
 import os
 import logging
 import mimetypes
+import time
 from typing import Optional
 from huggingface_hub import InferenceClient
 from huggingface_hub.utils import HfHubHTTPError
@@ -77,7 +78,32 @@ class TranscriptionService:
             # Build full URL to bypass api-inference.huggingface.co DNS resolution error
             model_url = f"https://router.huggingface.co/hf-inference/models/{model_id}"
             logger.info(f"[Backend] Connecting to: {model_url}")
-            response = client.automatic_speech_recognition(audio_bytes, model=model_url)
+            
+            # Retry loop with exponential backoff for 429 rate limit errors
+            max_retries = 3
+            backoff_factor = 2
+            base_delay = 1.0  # seconds
+            
+            response = None
+            for attempt in range(max_retries + 1):
+                try:
+                    response = client.automatic_speech_recognition(audio_bytes, model=model_url)
+                    break # Success!
+                except HfHubHTTPError as e:
+                    is_rate_limit = False
+                    if e.response is not None and e.response.status_code == 429:
+                        is_rate_limit = True
+                    elif "429" in str(e) or "too many requests" in str(e).lower() or "rate limit" in str(e).lower():
+                        is_rate_limit = True
+                        
+                    if is_rate_limit and attempt < max_retries:
+                        delay = base_delay * (backoff_factor ** attempt)
+                        logger.warning(f"Rate limit (429) hit during transcription. Retrying in {delay:.2f}s... (Attempt {attempt+1}/{max_retries})")
+                        time.sleep(delay)
+                    else:
+                        raise e
+                except Exception as e:
+                    raise e
             
             # The ASR response is usually a dictionary with {"text": "..."}
             if isinstance(response, dict) and "text" in response:

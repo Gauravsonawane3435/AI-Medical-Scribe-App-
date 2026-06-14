@@ -926,26 +926,164 @@ textarea:focus {
 
 /* Responsive Grid Adapters */
 @media (max-width: 1100px) {
+    .app-container {
+        height: auto;
+        min-height: 100vh;
+        padding: 16px;
+    }
+
     .main-layout {
         flex-direction: column;
         height: auto;
         overflow: visible;
+        gap: 20px;
     }
     
     .sidebar-panel {
         width: 100%;
         height: auto;
         overflow: visible;
+        gap: 20px;
+        padding: 20px;
+    }
+
+    /* Wrap configuration dropdowns in a grid on tablets/wider devices to save vertical space */
+    .sidebar-panel .panel-section:first-of-type {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+        gap: 16px;
+    }
+
+    .sidebar-panel .panel-section:first-of-type h3 {
+        grid-column: 1 / -1;
     }
     
     .workspace-area {
         flex-direction: column;
         height: auto;
         overflow: visible;
+        gap: 20px;
     }
     
     .workspace-card {
-        height: 600px;
+        height: 550px;
+    }
+}
+
+@media (max-width: 768px) {
+    .app-container {
+        padding: 12px;
+    }
+
+    .sidebar-panel .panel-section:first-of-type {
+        grid-template-columns: 1fr;
+    }
+
+    .workspace-card {
+        height: 520px;
+    }
+
+    .card-header {
+        padding: 14px 18px;
+    }
+
+    .card-header h2 {
+        font-size: 16px;
+    }
+
+    .tab-content {
+        padding: 16px;
+    }
+
+    .transcript-editor-container {
+        padding: 16px;
+    }
+
+    .note-sections-container {
+        padding: 16px;
+    }
+    
+    .workspace-action-row {
+        padding: 0 16px 16px 16px;
+    }
+}
+
+@media (max-width: 600px) {
+    .app-header {
+        flex-direction: column;
+        gap: 12px;
+        align-items: center;
+        text-align: center;
+        padding-bottom: 16px;
+        margin-bottom: 16px;
+    }
+
+    .logo-area {
+        flex-direction: column;
+        gap: 8px;
+    }
+
+    .logo-text {
+        text-align: center;
+    }
+
+    .logo-text h1 {
+        font-size: 20px;
+    }
+
+    .logo-text p {
+        font-size: 12px;
+    }
+
+    .header-actions {
+        width: 100%;
+        justify-content: center;
+        flex-wrap: wrap;
+        gap: 8px;
+    }
+
+    .status-badge {
+        padding: 6px 12px;
+        font-size: 12px;
+    }
+}
+
+@media (max-width: 480px) {
+    .app-container {
+        padding: 8px;
+    }
+
+    .sidebar-panel {
+        padding: 16px;
+    }
+
+    .workspace-card {
+        height: 480px;
+    }
+
+    .dictation-panel {
+        flex-direction: column;
+        text-align: center;
+        gap: 12px;
+    }
+
+    .dictation-status {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+    }
+
+    #toast-container {
+        bottom: 16px;
+        left: 16px;
+        right: 16px;
+        width: auto;
+    }
+
+    .toast {
+        min-width: 0;
+        width: 100%;
+        padding: 12px;
     }
 }
 
