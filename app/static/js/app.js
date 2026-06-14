@@ -4,6 +4,12 @@ let isRecording = false;
 let recognitionState = "stopped"; // 'stopped', 'starting', 'recording', 'stopping'
 let systemPromptDefault = "";
 
+// Safari / MediaRecorder variables
+let mediaRecorder = null;
+let audioStream = null;
+let audioChunks = [];
+let useAudioRecorder = false;
+
 // DOM Elements
 const recordButton = document.getElementById("record-button");
 const recordIcon = document.getElementById("record-icon");
@@ -257,12 +263,23 @@ async function fetchSettings() {
 
 // Initialize Speech Recognition
 function initSpeechRecognition() {
+    const isSafari = /^((?!chrome|android|crios).)*safari/i.test(navigator.userAgent);
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SpeechRecognition) {
-        console.warn("Web Speech API is not supported in this browser.");
-        recordState.textContent = "Live dictation not supported in this browser. Please upload audio files.";
-        recordButton.disabled = true;
-        recordButton.style.opacity = "0.5";
+    
+    // Fallback if Safari is detected, or SpeechRecognition is completely absent
+    if (isSafari || !SpeechRecognition) {
+        useAudioRecorder = true;
+    }
+
+    if (useAudioRecorder) {
+        if (!window.MediaRecorder || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+            console.warn("Audio recording is not supported in this browser.");
+            recordState.textContent = "Audio recording is not supported in this browser. Please upload audio files.";
+            recordButton.disabled = true;
+            recordButton.style.opacity = "0.5";
+            return;
+        }
+        recordState.textContent = "Click microphone to start recording";
         return;
     }
 
@@ -347,6 +364,182 @@ function stopDictation() {
     }
 }
 
+function startAudioRecording() {
+    if (recognitionState !== "stopped") return;
+    
+    recognitionState = "starting";
+    recordState.textContent = "Starting microphone...";
+    
+    navigator.mediaDevices.getUserMedia({ audio: true })
+        .then((stream) => {
+            if (recognitionState !== "starting") {
+                // Stopped before stream resolved
+                stream.getTracks().forEach(track => track.stop());
+                return;
+            }
+            
+            audioStream = stream;
+            audioChunks = [];
+            
+            // Negotiate MIME type
+            let options = {};
+            const types = [
+                "audio/webm;codecs=opus",
+                "audio/webm",
+                "audio/ogg;codecs=opus",
+                "audio/mp4",
+                "audio/aac",
+                "audio/wav"
+            ];
+            let selectedType = "";
+            for (const type of types) {
+                if (MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(type)) {
+                    selectedType = type;
+                    options = { mimeType: type };
+                    break;
+                }
+            }
+            console.log("Selected recording mimeType:", selectedType);
+            
+            mediaRecorder = new MediaRecorder(stream, options);
+            
+            mediaRecorder.ondataavailable = (event) => {
+                if (event.data && event.data.size > 0) {
+                    audioChunks.push(event.data);
+                }
+            };
+            
+            mediaRecorder.onstop = () => {
+                uploadRecordedAudio();
+                if (audioStream) {
+                    audioStream.getTracks().forEach(track => track.stop());
+                    audioStream = null;
+                }
+            };
+            
+            mediaRecorder.start();
+            
+            recognitionState = "recording";
+            isRecording = true;
+            recordIcon.className = "fa-solid fa-microphone-slash";
+            recordButton.classList.add("recording");
+            recordState.textContent = "Recording audio... Speak clearly into your mic.";
+            showToast("Recording Started", "Recording your audio...", "info");
+        })
+        .catch((err) => {
+            console.error("Microphone access error:", err);
+            recognitionState = "stopped";
+            isRecording = false;
+            recordIcon.className = "fa-solid fa-microphone";
+            recordButton.classList.remove("recording");
+            
+            let errorMsg = "Could not access microphone.";
+            if (err.name === "NotAllowedError" || err.name === "PermissionDeniedError") {
+                errorMsg = "Microphone permission denied. Please allow microphone access in your browser settings.";
+            } else if (err.name === "NotFoundError" || err.name === "DevicesNotFoundError") {
+                errorMsg = "No microphone found on your device.";
+            }
+            
+            showToast("Microphone Error", errorMsg, "error");
+            recordState.textContent = "Click microphone to start recording";
+        });
+}
+
+function stopAudioRecording() {
+    if (recognitionState !== "recording" && recognitionState !== "starting") return;
+    
+    recognitionState = "stopping";
+    recordState.textContent = "Stopping recording...";
+    
+    if (mediaRecorder && mediaRecorder.state !== "inactive") {
+        mediaRecorder.stop();
+    } else {
+        recognitionState = "stopped";
+        isRecording = false;
+        recordIcon.className = "fa-solid fa-microphone";
+        recordButton.classList.remove("recording");
+        recordState.textContent = "Click microphone to start recording";
+        
+        if (audioStream) {
+            audioStream.getTracks().forEach(track => track.stop());
+            audioStream = null;
+        }
+    }
+}
+
+function uploadRecordedAudio() {
+    if (audioChunks.length === 0) {
+        showToast("Recording Empty", "No audio recorded.", "error");
+        resetAudioRecorderUI();
+        return;
+    }
+    
+    const mimeType = (mediaRecorder && mediaRecorder.mimeType) || "audio/mp4";
+    const audioBlob = new Blob(audioChunks, { type: mimeType });
+    
+    let extension = "mp4";
+    if (mimeType.includes("webm")) {
+        extension = "webm";
+    } else if (mimeType.includes("ogg")) {
+        extension = "ogg";
+    } else if (mimeType.includes("wav")) {
+        extension = "wav";
+    } else if (mimeType.includes("aac")) {
+        extension = "aac";
+    }
+    
+    const filename = `recording.${extension}`;
+    const file = new File([audioBlob], filename, { type: mimeType });
+    
+    recordState.textContent = "Transcribing recorded audio... Please wait.";
+    showToast("Transcribing", "Uploading audio for transcription...", "info");
+    
+    const formData = new FormData();
+    formData.append("file", file);
+    formData.append("model_key", asrModelSelect.value);
+    
+    fetch("/api/transcribe", {
+        method: "POST",
+        body: formData
+    })
+    .then(async (response) => {
+        if (!response.ok) {
+            const errData = await response.json();
+            throw new Error(errData.detail || "Transcription service failed");
+        }
+        return response.json();
+    })
+    .then((data) => {
+        if (data.transcript) {
+            if (transcriptTextarea.value.trim() !== "") {
+                transcriptTextarea.value += " " + data.transcript;
+            } else {
+                transcriptTextarea.value = data.transcript;
+            }
+            transcriptTextarea.scrollTop = transcriptTextarea.scrollHeight;
+            showToast("Transcription Successful", "Audio recording transcribed successfully.", "success");
+        } else {
+            showToast("Transcription Empty", "No text was transcribed from the audio.", "warning");
+        }
+    })
+    .catch((error) => {
+        console.error("Transcription Error:", error);
+        showToast("Transcription Failed", error.message, "error");
+    })
+    .finally(() => {
+        resetAudioRecorderUI();
+    });
+}
+
+function resetAudioRecorderUI() {
+    recognitionState = "stopped";
+    isRecording = false;
+    recordIcon.className = "fa-solid fa-microphone";
+    recordButton.classList.remove("recording");
+    recordState.textContent = "Click microphone to start recording";
+    audioChunks = [];
+}
+
 // UI Tab Switcher
 function switchInputTab(tabId) {
     document.querySelectorAll(".tab-btn").forEach(btn => btn.classList.remove("active"));
@@ -363,7 +556,11 @@ function switchInputTab(tabId) {
     
     // If switching away from live and recording, stop recording
     if (tabId !== 'live-tab' && isRecording) {
-        stopDictation();
+        if (useAudioRecorder) {
+            stopAudioRecording();
+        } else {
+            stopDictation();
+        }
     }
 }
 
@@ -371,10 +568,18 @@ function switchInputTab(tabId) {
 function setupEventListeners() {
     // Record Button
     recordButton.addEventListener("click", () => {
-        if (recognitionState === "stopped") {
-            startDictation();
-        } else if (recognitionState === "recording" || recognitionState === "starting") {
-            stopDictation();
+        if (useAudioRecorder) {
+            if (recognitionState === "stopped") {
+                startAudioRecording();
+            } else if (recognitionState === "recording" || recognitionState === "starting") {
+                stopAudioRecording();
+            }
+        } else {
+            if (recognitionState === "stopped") {
+                startDictation();
+            } else if (recognitionState === "recording" || recognitionState === "starting") {
+                stopDictation();
+            }
         }
     });
 
