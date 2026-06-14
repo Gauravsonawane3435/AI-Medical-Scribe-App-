@@ -365,15 +365,21 @@ function stopDictation() {
 }
 
 function startAudioRecording() {
-    if (recognitionState !== "stopped") return;
+    if (recognitionState !== "stopped") {
+        console.warn("[AudioRecorder] startAudioRecording ignored. Current state:", recognitionState);
+        return;
+    }
     
+    console.log("[AudioRecorder] startAudioRecording() initiated.");
     recognitionState = "starting";
     recordState.textContent = "Starting microphone...";
     
+    console.log("[AudioRecorder] Requesting microphone permission via getUserMedia...");
     navigator.mediaDevices.getUserMedia({ audio: true })
         .then((stream) => {
+            console.log("[AudioRecorder] Microphone permission granted. Stream tracks:", stream.getTracks().map(t => `${t.kind}:${t.label}`));
             if (recognitionState !== "starting") {
-                // Stopped before stream resolved
+                console.warn("[AudioRecorder] Stream obtained but state changed in-between. Stopping stream.");
                 stream.getTracks().forEach(track => track.stop());
                 return;
             }
@@ -399,25 +405,42 @@ function startAudioRecording() {
                     break;
                 }
             }
-            console.log("Selected recording mimeType:", selectedType);
+            console.log("[AudioRecorder] Negotiated recording mimeType:", selectedType || "default");
             
-            mediaRecorder = new MediaRecorder(stream, options);
+            try {
+                mediaRecorder = new MediaRecorder(stream, options);
+                console.log("[AudioRecorder] MediaRecorder initialized successfully with options:", options);
+            } catch (e) {
+                console.warn("[AudioRecorder] Failed to initialize MediaRecorder with options, trying default constructor:", e);
+                try {
+                    mediaRecorder = new MediaRecorder(stream);
+                    console.log("[AudioRecorder] Fallback MediaRecorder initialized successfully (default settings).");
+                } catch (err2) {
+                    console.error("[AudioRecorder] Fatal: Failed to initialize default MediaRecorder:", err2);
+                    throw err2;
+                }
+            }
             
             mediaRecorder.ondataavailable = (event) => {
+                console.log("[AudioRecorder] ondataavailable event fired. size:", event.data ? event.data.size : "undefined");
                 if (event.data && event.data.size > 0) {
                     audioChunks.push(event.data);
                 }
             };
             
             mediaRecorder.onstop = () => {
+                console.log("[AudioRecorder] mediaRecorder.onstop event fired. Total chunks collected:", audioChunks.length);
                 uploadRecordedAudio();
                 if (audioStream) {
+                    console.log("[AudioRecorder] Stopping audioStream tracks...");
                     audioStream.getTracks().forEach(track => track.stop());
                     audioStream = null;
                 }
             };
             
-            mediaRecorder.start();
+            // Start recording with 1000ms timeslice to ensure ondataavailable fires periodically on Safari/iOS
+            console.log("[AudioRecorder] Calling mediaRecorder.start(1000)...");
+            mediaRecorder.start(1000);
             
             recognitionState = "recording";
             isRecording = true;
@@ -427,7 +450,7 @@ function startAudioRecording() {
             showToast("Recording Started", "Recording your audio...", "info");
         })
         .catch((err) => {
-            console.error("Microphone access error:", err);
+            console.error("[AudioRecorder] getUserMedia / start recording failed:", err);
             recognitionState = "stopped";
             isRecording = false;
             recordIcon.className = "fa-solid fa-microphone";
@@ -446,14 +469,20 @@ function startAudioRecording() {
 }
 
 function stopAudioRecording() {
-    if (recognitionState !== "recording" && recognitionState !== "starting") return;
+    console.log("[AudioRecorder] stopAudioRecording() initiated. Current state:", recognitionState);
+    if (recognitionState !== "recording" && recognitionState !== "starting") {
+        console.warn("[AudioRecorder] stopAudioRecording ignored. Not in active/starting state.");
+        return;
+    }
     
     recognitionState = "stopping";
     recordState.textContent = "Stopping recording...";
     
     if (mediaRecorder && mediaRecorder.state !== "inactive") {
+        console.log("[AudioRecorder] Calling mediaRecorder.stop(). Current state:", mediaRecorder.state);
         mediaRecorder.stop();
     } else {
+        console.warn("[AudioRecorder] mediaRecorder is inactive or null. Resetting UI manually.");
         recognitionState = "stopped";
         isRecording = false;
         recordIcon.className = "fa-solid fa-microphone";
@@ -461,6 +490,7 @@ function stopAudioRecording() {
         recordState.textContent = "Click microphone to start recording";
         
         if (audioStream) {
+            console.log("[AudioRecorder] Stopping audioStream tracks...");
             audioStream.getTracks().forEach(track => track.stop());
             audioStream = null;
         }
@@ -468,14 +498,18 @@ function stopAudioRecording() {
 }
 
 function uploadRecordedAudio() {
+    console.log("[AudioRecorder] uploadRecordedAudio() called. Total chunks collected:", audioChunks.length);
     if (audioChunks.length === 0) {
         showToast("Recording Empty", "No audio recorded.", "error");
+        console.error("[AudioRecorder] Error: No audio chunks captured.");
         resetAudioRecorderUI();
         return;
     }
     
     const mimeType = (mediaRecorder && mediaRecorder.mimeType) || "audio/mp4";
+    console.log("[AudioRecorder] Creating Blob from chunks with mimeType:", mimeType);
     const audioBlob = new Blob(audioChunks, { type: mimeType });
+    console.log("[AudioRecorder] Created Blob. Size:", audioBlob.size, "bytes");
     
     let extension = "mp4";
     if (mimeType.includes("webm")) {
@@ -498,18 +532,28 @@ function uploadRecordedAudio() {
     formData.append("file", file);
     formData.append("model_key", asrModelSelect.value);
     
+    console.log("[AudioRecorder] Uploading file to /api/transcribe. Filename:", filename, "size:", file.size);
+    
     fetch("/api/transcribe", {
         method: "POST",
         body: formData
     })
     .then(async (response) => {
+        console.log("[AudioRecorder] Upload response received. Status:", response.status, "Ok:", response.ok);
         if (!response.ok) {
-            const errData = await response.json();
-            throw new Error(errData.detail || "Transcription service failed");
+            const errText = await response.text();
+            console.error("[AudioRecorder] Server error response:", errText);
+            let detail = "Transcription service failed";
+            try {
+                const errData = JSON.parse(errText);
+                detail = errData.detail || detail;
+            } catch (e) {}
+            throw new Error(detail);
         }
         return response.json();
     })
     .then((data) => {
+        console.log("[AudioRecorder] Transcription response JSON:", data);
         if (data.transcript) {
             if (transcriptTextarea.value.trim() !== "") {
                 transcriptTextarea.value += " " + data.transcript;
@@ -517,13 +561,18 @@ function uploadRecordedAudio() {
                 transcriptTextarea.value = data.transcript;
             }
             transcriptTextarea.scrollTop = transcriptTextarea.scrollHeight;
+            
+            // Prevent "Input Empty" trigger by dispatching input events
+            transcriptTextarea.dispatchEvent(new Event('input'));
+            
             showToast("Transcription Successful", "Audio recording transcribed successfully.", "success");
         } else {
+            console.warn("[AudioRecorder] Warning: transcript field is empty or missing in response.");
             showToast("Transcription Empty", "No text was transcribed from the audio.", "warning");
         }
     })
     .catch((error) => {
-        console.error("Transcription Error:", error);
+        console.error("[AudioRecorder] Transcription Error:", error);
         showToast("Transcription Failed", error.message, "error");
     })
     .finally(() => {
@@ -532,6 +581,7 @@ function uploadRecordedAudio() {
 }
 
 function resetAudioRecorderUI() {
+    console.log("[AudioRecorder] Resetting audio recorder UI to stopped state.");
     recognitionState = "stopped";
     isRecording = false;
     recordIcon.className = "fa-solid fa-microphone";
