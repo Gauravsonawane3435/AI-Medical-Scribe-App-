@@ -110,30 +110,29 @@ class TranscriptionService:
         
         # Detect and log correct audio MIME Type
         mime_type = get_audio_mime_type(content_type, filename)
-        logger.info(f"[Backend] Processing ASR bytes: filename='{filename}', mime_type='{mime_type}', model='{model_id}'")
+        logger.info(f"[Backend] Processing ASR bytes: filename='{filename}', mime_type='{mime_type}', size={len(audio_bytes)} bytes, model='{model_id}'")
         
-        # Check if the incoming file is a WebM recording (Chrome / mobile browser default)
-        # WebM with opus codecs frequently triggers router/content-type errors on Hugging Face.
-        # We convert it to a standard mono WAV file (16kHz PCM) on the server.
-        is_webm = "webm" in mime_type.lower() or (filename and filename.lower().endswith((".webm", ".weba")))
-        if is_webm:
-            logger.info("[Backend] WebM audio detected. Converting to standard WAV (16kHz mono) for Hugging Face compatibility...")
+        # Check if the incoming file needs conversion to standard WAV (16kHz mono) for Hugging Face compatibility.
+        # Native WAV and MP3 are supported directly. WebM, M4A, OGG, AAC, MP4, and CAF are converted to WAV if ffmpeg is available.
+        needs_conversion = any(ext in mime_type.lower() for ext in ["webm", "m4a", "ogg", "aac", "mp4", "caf"]) or \
+                           (filename and filename.lower().endswith((".webm", ".weba", ".m4a", ".ogg", ".aac", ".mp4", ".caf")))
+        
+        if needs_conversion:
+            logger.info(f"[Backend] Audio format '{mime_type}' needs conversion. Attempting to convert to WAV (16kHz mono)...")
             try:
-                audio_bytes = convert_audio_to_wav_16k(audio_bytes)
+                converted_bytes = convert_audio_to_wav_16k(audio_bytes)
+                audio_bytes = converted_bytes
                 mime_type = "audio/wav"
                 filename = "recording.wav"
                 logger.info("[Backend] Conversion successful. Updated parameters to WAV.")
             except Exception as e:
-                logger.error(f"[Backend] WebM to WAV conversion failed: {e}")
-                raise RuntimeError(
-                    f"Audio conversion failed: ffmpeg is required on the server to decode and transcribe webm recordings, "
-                    f"but conversion failed. Details: {str(e)}"
-                )
+                logger.warning(f"[Backend] Audio conversion to WAV failed: {e}. Falling back to raw audio upload mapped to application/octet-stream.")
+                mime_type = "application/octet-stream"
         
-        # Hugging Face serverless router rejects some non-standard audio MIME types (like audio/mp4, audio/m4a, audio/aac).
+        # Hugging Face serverless router rejects some non-standard audio MIME types (like audio/mp4, audio/m4a, audio/aac, audio/webm, audio/ogg).
         # We map these to application/octet-stream to allow Whisper's backend to decode them from container headers.
         hf_mime_type = mime_type
-        if mime_type in ("audio/mp4", "audio/m4a", "audio/aac", "audio/x-caf", "audio/caf", "audio/x-m4a"):
+        if mime_type in ("audio/mp4", "audio/m4a", "audio/aac", "audio/x-caf", "audio/caf", "audio/x-m4a") or "webm" in mime_type.lower() or "ogg" in mime_type.lower() or mime_type == "application/octet-stream":
             hf_mime_type = "application/octet-stream"
             logger.info(f"[Backend] Mapping MIME type '{mime_type}' to '{hf_mime_type}' for Hugging Face compatibility.")
 
@@ -148,7 +147,7 @@ class TranscriptionService:
             model_url = f"https://router.huggingface.co/hf-inference/models/{model_id}"
             logger.info(f"[Backend] Connecting to: {model_url}")
             
-            # Retry loop with exponential backoff for 429 rate limit errors
+            # Retry loop with exponential backoff for rate limits, model loading, and transient network errors
             max_retries = 3
             backoff_factor = 2
             base_delay = 1.0  # seconds
@@ -158,29 +157,34 @@ class TranscriptionService:
                 try:
                     response = client.automatic_speech_recognition(audio_bytes, model=model_url)
                     break # Success!
-                except HfHubHTTPError as e:
-                    is_rate_limit = False
-                    if e.response is not None and e.response.status_code == 429:
-                        is_rate_limit = True
-                    elif "429" in str(e) or "too many requests" in str(e).lower() or "rate limit" in str(e).lower():
-                        is_rate_limit = True
+                except (HfHubHTTPError, Exception) as e:
+                    is_retryable = True
+                    # Check if it is a permanent auth/validation issue (400, 401, 403)
+                    if isinstance(e, HfHubHTTPError) and e.response is not None:
+                        if e.response.status_code in (400, 401, 403):
+                            is_retryable = False
+                    
+                    if isinstance(e, ValueError):
+                        is_retryable = False
                         
-                    if is_rate_limit and attempt < max_retries:
+                    if is_retryable and attempt < max_retries:
                         delay = base_delay * (backoff_factor ** attempt)
-                        logger.warning(f"Rate limit (429) hit during transcription. Retrying in {delay:.2f}s... (Attempt {attempt+1}/{max_retries})")
+                        logger.warning(f"[Backend] Retryable error hit during transcription: {e}. Retrying in {delay:.2f}s... (Attempt {attempt+1}/{max_retries})")
                         time.sleep(delay)
                     else:
                         raise e
-                except Exception as e:
-                    raise e
             
             # The ASR response is usually a dictionary with {"text": "..."}
+            transcript = ""
             if isinstance(response, dict) and "text" in response:
-                return response["text"]
+                transcript = response["text"]
             elif isinstance(response, str):
-                return response
+                transcript = response
             else:
-                return str(response)
+                transcript = str(response)
+                
+            logger.info(f"[Backend] Transcription successful. Result preview: '{transcript[:100]}...'")
+            return transcript
                 
         except HfHubHTTPError as e:
             logger.error(f"Hugging Face Inference API error: {e}")

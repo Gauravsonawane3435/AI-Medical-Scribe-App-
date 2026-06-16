@@ -1141,3 +1141,12 @@ textarea:focus {
 .info-hint i {
     color: var(--primary);
 }
+
+/* Button Disabled Styling Rules */
+.btn:disabled, .btn.disabled {
+    opacity: 0.5 !important;
+    cursor: not-allowed !important;
+    transform: none !important;
+    box-shadow: none !important;
+    pointer-events: none !important;
+}

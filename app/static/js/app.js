@@ -3,6 +3,8 @@ let recognition = null;
 let isRecording = false;
 let recognitionState = "stopped"; // 'stopped', 'starting', 'recording', 'stopping'
 let systemPromptDefault = "";
+let isTranscribing = false;
+let isGeneratingNote = false;
 
 // Safari / MediaRecorder variables
 let mediaRecorder = null;
@@ -90,6 +92,75 @@ function checkDemoMode() {
     }
 }
 
+// Update the visual and disabled state of all UI elements based on current application activity
+function updateGenerateButtonState() {
+    const transcript = transcriptTextarea.value.trim();
+    const isBusy = isRecording || isTranscribing || isGeneratingNote;
+    const isGenerateDisabled = !transcript || isRecording || isTranscribing || isGeneratingNote;
+    
+    generateNoteBtn.disabled = isGenerateDisabled;
+    
+    if (isGenerateDisabled) {
+        generateNoteBtn.classList.add("disabled");
+        generateNoteBtn.style.opacity = "0.5";
+        generateNoteBtn.style.cursor = "not-allowed";
+    } else {
+        generateNoteBtn.classList.remove("disabled");
+        generateNoteBtn.style.opacity = "1";
+        generateNoteBtn.style.cursor = "pointer";
+    }
+    
+    // Disable/Enable record button
+    if (recordButton) {
+        if (isRecording) {
+            recordButton.disabled = false;
+            recordButton.style.opacity = "1";
+            recordButton.style.cursor = "pointer";
+        } else {
+            recordButton.disabled = isTranscribing || isGeneratingNote;
+            if (isTranscribing || isGeneratingNote) {
+                recordButton.style.opacity = "0.5";
+                recordButton.style.cursor = "not-allowed";
+            } else {
+                recordButton.style.opacity = "1";
+                recordButton.style.cursor = "pointer";
+            }
+        }
+    }
+    
+    // Disable/Enable drop zone and input fields
+    if (dropZone) {
+        const dropZoneBtn = dropZone.querySelector('.btn');
+        const isUploadDisabled = isRecording || isTranscribing || isGeneratingNote;
+        if (dropZoneBtn) {
+            dropZoneBtn.disabled = isUploadDisabled;
+            if (isUploadDisabled) {
+                dropZoneBtn.style.opacity = "0.5";
+                dropZoneBtn.style.cursor = "not-allowed";
+            } else {
+                dropZoneBtn.style.opacity = "1";
+                dropZoneBtn.style.cursor = "pointer";
+            }
+        }
+        if (isUploadDisabled) {
+            dropZone.style.pointerEvents = "none";
+            dropZone.style.opacity = "0.5";
+        } else {
+            dropZone.style.pointerEvents = "auto";
+            dropZone.style.opacity = "1";
+        }
+    }
+    
+    // Disable/enable settings controls
+    if (asrModelSelect) asrModelSelect.disabled = isBusy;
+    if (llmModelSelect) llmModelSelect.disabled = isBusy;
+    if (specialtySelect) specialtySelect.disabled = isBusy;
+    if (dictationLangSelect) dictationLangSelect.disabled = isBusy;
+    if (outputModeSelect) outputModeSelect.disabled = isBusy;
+    if (clearTranscriptBtn) clearTranscriptBtn.disabled = isBusy;
+    if (transcriptTextarea) transcriptTextarea.disabled = isGeneratingNote; // Don't let users edit transcript while generating note
+}
+
 // Load Cached Settings from LocalStorage
 function loadCachedSettings() {
     localStorage.removeItem("hf_token"); // Clean up old cached browser tokens for security
@@ -114,8 +185,12 @@ function loadCachedSettings() {
     if (customInstruction && localStorage.getItem("custom_prompt_text")) {
         customInstruction.value = localStorage.getItem("custom_prompt_text");
     }
+    if (localStorage.getItem("transcript_text")) {
+        transcriptTextarea.value = localStorage.getItem("transcript_text");
+    }
     toggleOutputMode();
     checkDemoMode();
+    updateGenerateButtonState();
 }
 
 // Toggle layout based on Structured Note vs Custom Prompt vs Raw Transcript modes
@@ -296,6 +371,7 @@ function initSpeechRecognition() {
         recordButton.classList.add("recording");
         recordState.textContent = "Dictation active... Speak clearly into your mic.";
         showToast("Live Dictation Started", "Listening for your voice...", "info");
+        updateGenerateButtonState();
     };
 
     recognition.onresult = (event) => {
@@ -319,6 +395,8 @@ function initSpeechRecognition() {
         if (finalTranscript) {
             // Append final result to transcript text area
             transcriptTextarea.value += finalTranscript;
+            localStorage.setItem("transcript_text", transcriptTextarea.value);
+            updateGenerateButtonState();
             // Trigger auto-scroll to bottom of textarea
             transcriptTextarea.scrollTop = transcriptTextarea.scrollHeight;
         }
@@ -326,13 +404,20 @@ function initSpeechRecognition() {
 
     recognition.onerror = (event) => {
         console.error("Speech Recognition Error:", event.error);
-        if (event.error === "service-not-allowed") {
-            console.warn("[SpeechRecognition] service-not-allowed encountered. Falling back to MediaRecorder.");
+        
+        // If the user cancelled/stopped the recording manually, or the request was aborted, ignore all errors.
+        if (recognitionState === "stopping" || event.error === "aborted") {
+            console.log("[SpeechRecognition] Ignoring error because recognition is stopping or aborted:", event.error);
+            return;
+        }
+
+        if (event.error === "service-not-allowed" || event.error === "network") {
+            console.warn(`[SpeechRecognition] ${event.error} encountered. Falling back to MediaRecorder.`);
             try { recognition.abort(); } catch(e) {}
             
             useAudioRecorder = true;
             if (window.MediaRecorder && navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-                showToast("Switching Dictation Mode", "Speech service not allowed on this browser. Falling back to audio recording.", "info");
+                showToast("Switching Dictation Mode", "Speech service not allowed or network error on this browser. Falling back to audio recording.", "info");
                 recordState.textContent = "Click microphone to start recording";
                 
                 // Reset standard dictation visual states
@@ -363,6 +448,7 @@ function initSpeechRecognition() {
         recordIcon.className = "fa-solid fa-microphone";
         recordButton.classList.remove("recording");
         recordState.textContent = "Click microphone to resume live transcription";
+        updateGenerateButtonState();
     };
 }
 
@@ -457,6 +543,8 @@ function startAudioRecording() {
             
             mediaRecorder.onstop = () => {
                 console.log("[AudioRecorder] mediaRecorder.onstop event fired. Total chunks collected:", audioChunks.length);
+                isRecording = false;
+                updateGenerateButtonState();
                 uploadRecordedAudio();
                 if (audioStream) {
                     console.log("[AudioRecorder] Stopping audioStream tracks...");
@@ -475,9 +563,10 @@ function startAudioRecording() {
             recordButton.classList.add("recording");
             recordState.textContent = "Recording audio... Speak clearly into your mic.";
             showToast("Recording Started", "Recording your audio...", "info");
+            updateGenerateButtonState();
         })
         .catch((err) => {
-            console.error("[AudioRecorder] getUserMedia / start recording failed:", err);
+            console.error("[MicrophoneAccessError] getUserMedia / start recording failed:", err);
             recognitionState = "stopped";
             isRecording = false;
             recordIcon.className = "fa-solid fa-microphone";
@@ -492,6 +581,7 @@ function startAudioRecording() {
             
             showToast("Microphone Error", errorMsg, "error");
             recordState.textContent = "Click microphone to start recording";
+            updateGenerateButtonState();
         });
 }
 
@@ -561,6 +651,9 @@ function uploadRecordedAudio() {
     
     console.log("[AudioRecorder] Uploading file to /api/transcribe. Filename:", filename, "size:", file.size);
     
+    isTranscribing = true;
+    updateGenerateButtonState();
+
     fetch("/api/transcribe", {
         method: "POST",
         body: formData
@@ -568,13 +661,21 @@ function uploadRecordedAudio() {
     .then(async (response) => {
         console.log("[AudioRecorder] Upload response received. Status:", response.status, "Ok:", response.ok);
         if (!response.ok) {
+            let detail = "Transcription service failed";
             const errText = await response.text();
             console.error("[AudioRecorder] Server error response:", errText);
-            let detail = "Transcription service failed";
             try {
                 const errData = JSON.parse(errText);
                 detail = errData.detail || detail;
-            } catch (e) {}
+            } catch (e) {
+                detail = `Server Error (${response.status}): ${response.statusText || 'Internal Server Error'}`;
+                if (errText && errText.includes("<title>")) {
+                    const match = errText.match(/<title>([^<]+)<\/title>/);
+                    if (match && match[1]) {
+                        detail += ` - ${match[1].trim()}`;
+                    }
+                }
+            }
             throw new Error(detail);
         }
         return response.json();
@@ -587,6 +688,7 @@ function uploadRecordedAudio() {
             } else {
                 transcriptTextarea.value = data.transcript;
             }
+            localStorage.setItem("transcript_text", transcriptTextarea.value);
             transcriptTextarea.scrollTop = transcriptTextarea.scrollHeight;
             
             // Prevent "Input Empty" trigger by dispatching input events
@@ -599,11 +701,20 @@ function uploadRecordedAudio() {
         }
     })
     .catch((error) => {
-        console.error("[AudioRecorder] Transcription Error:", error);
+        const msg = error.message;
+        if (msg.includes("conversion") || msg.includes("ffmpeg")) {
+            console.error("[AudioConversionError] Server failed to convert WebM audio to WAV:", error);
+        } else if (msg.includes("Hugging Face") || msg.includes("Hub error") || msg.includes("API error") || msg.includes("Unauthorized") || msg.includes("token")) {
+            console.error("[HuggingFaceAPIError] Transcription API request failed:", error);
+        } else {
+            console.error("[AudioUploadError] Failed to upload or transcribe audio:", error);
+        }
         showToast("Transcription Failed", error.message, "error");
     })
     .finally(() => {
+        isTranscribing = false;
         resetAudioRecorderUI();
+        updateGenerateButtonState();
     });
 }
 
@@ -611,10 +722,12 @@ function resetAudioRecorderUI() {
     console.log("[AudioRecorder] Resetting audio recorder UI to stopped state.");
     recognitionState = "stopped";
     isRecording = false;
+    isTranscribing = false;
     recordIcon.className = "fa-solid fa-microphone";
     recordButton.classList.remove("recording");
     recordState.textContent = "Click microphone to start recording";
     audioChunks = [];
+    updateGenerateButtonState();
 }
 
 // UI Tab Switcher
@@ -717,9 +830,17 @@ function setupEventListeners() {
         if (transcriptTextarea.value.trim() !== "") {
             if (confirm("Clear the raw conversation transcript?")) {
                 transcriptTextarea.value = "";
+                localStorage.removeItem("transcript_text");
                 showToast("Cleared", "Conversation transcript cleared.", "info");
+                updateGenerateButtonState();
             }
         }
+    });
+
+    // Transcript Input Listener
+    transcriptTextarea.addEventListener("input", () => {
+        localStorage.setItem("transcript_text", transcriptTextarea.value);
+        updateGenerateButtonState();
     });
 
     // Drag & Drop Listeners
@@ -799,6 +920,9 @@ function handleAudioFile(file) {
         }
     }, 400);
 
+    isTranscribing = true;
+    updateGenerateButtonState();
+
     // Call endpoint
     fetch("/api/transcribe", {
         method: "POST",
@@ -808,8 +932,21 @@ function handleAudioFile(file) {
     .then(async (response) => {
         clearInterval(progressInterval);
         if (!response.ok) {
-            const errData = await response.json();
-            throw new Error(errData.detail || "Transcription service failed");
+            let detail = "Transcription service failed";
+            const errText = await response.text();
+            try {
+                const errData = JSON.parse(errText);
+                detail = errData.detail || detail;
+            } catch (e) {
+                detail = `Server Error (${response.status}): ${response.statusText || 'Internal Server Error'}`;
+                if (errText && errText.includes("<title>")) {
+                    const match = errText.match(/<title>([^<]+)<\/title>/);
+                    if (match && match[1]) {
+                        detail += ` - ${match[1].trim()}`;
+                    }
+                }
+            }
+            throw new Error(detail);
         }
         return response.json();
     })
@@ -824,7 +961,9 @@ function handleAudioFile(file) {
             } else {
                 transcriptTextarea.value = data.transcript;
             }
+            localStorage.setItem("transcript_text", transcriptTextarea.value);
             showToast("Transcription Successful", "Audio file transcript added to workspace.", "success");
+            transcriptTextarea.dispatchEvent(new Event('input'));
         }
         
         setTimeout(resetUploadUI, 1500);
@@ -834,7 +973,14 @@ function handleAudioFile(file) {
         if (error.name === "AbortError") {
             showToast("Upload Cancelled", "Transcription process was aborted.", "info");
         } else {
-            console.error("Upload Error:", error);
+            const msg = error.message;
+            if (msg.includes("conversion") || msg.includes("ffmpeg")) {
+                console.error("[AudioConversionError] Server failed to convert WebM audio to WAV:", error);
+            } else if (msg.includes("Hugging Face") || msg.includes("Hub error") || msg.includes("API error") || msg.includes("Unauthorized") || msg.includes("token")) {
+                console.error("[HuggingFaceAPIError] Transcription API request failed:", error);
+            } else {
+                console.error("[AudioUploadError] Failed to upload or transcribe audio file:", error);
+            }
             showToast("Transcription Failed", error.message, "error");
         }
         resetUploadUI();
@@ -852,13 +998,19 @@ function resetUploadUI() {
     progressContainer.classList.add("hidden");
     fileInput.value = "";
     uploadController = null;
+    isTranscribing = false;
+    updateGenerateButtonState();
 }
 
 // Generate structured clinical note, custom response, or raw transcript from transcript text
 async function triggerNoteGeneration() {
+    if (isTranscribing) {
+        showToast("Transcription In Progress", "Please wait for transcription to complete.", "warning");
+        return;
+    }
     const transcript = transcriptTextarea.value.trim();
     if (!transcript) {
-        showToast("Input Empty", "Please type, record, or upload a transcript first.", "error");
+        showToast("Input Empty", "No transcript available. Please record or upload audio first.", "error");
         return;
     }
 
@@ -873,7 +1025,8 @@ async function triggerNoteGeneration() {
     }
 
     // Set Loading State
-    generateNoteBtn.disabled = true;
+    isGeneratingNote = true;
+    updateGenerateButtonState();
     generateSpinner.classList.remove("hidden");
     
     let loadMsg = "Generating clinical note...";
@@ -931,11 +1084,19 @@ async function triggerNoteGeneration() {
             showToast("Success", "Structured clinical note generated successfully!", "success");
         }
     } catch (error) {
-        console.error("Generation Error:", error);
+        const msg = error.message;
+        if (msg.includes("Hugging Face") || msg.includes("Hub error") || msg.includes("API error") || msg.includes("Unauthorized") || msg.includes("token")) {
+            console.error("[HuggingFaceAPIError] Note generation model request failed:", error);
+        } else if (msg.includes("failed") || msg.includes("connect") || msg.includes("NetworkError")) {
+            console.error("[NoteGenerationAPIError] Failure in note generation service:", error);
+        } else {
+            console.error("[GenerationError] Note generation failed:", error);
+        }
         showToast("Generation Failed", error.message, "error");
     } finally {
-        generateNoteBtn.disabled = false;
+        isGeneratingNote = false;
         generateSpinner.classList.add("hidden");
+        updateGenerateButtonState();
     }
 }
 

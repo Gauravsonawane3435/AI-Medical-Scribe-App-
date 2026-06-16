@@ -127,3 +127,34 @@ def test_transcribe_rate_limit_429(mock_transcribe):
     response = client.post("/api/transcribe", files=files, data=data)
     assert response.status_code == 429
     assert "Rate limit exceeded" in response.json()["detail"]
+
+@patch("app.services.transcription.convert_audio_to_wav_16k")
+@patch("app.services.transcription.InferenceClient")
+def test_webm_transcribe_fallback(mock_inference_client, mock_convert_wav):
+    """Verify that when ffmpeg fails during WebM transcription, we fallback to application/octet-stream."""
+    # Mock ffmpeg failure
+    mock_convert_wav.side_effect = FileNotFoundError("ffmpeg not found on the system path.")
+    
+    # Mock InferenceClient and response
+    mock_client_instance = MagicMock()
+    mock_client_instance.automatic_speech_recognition.return_value = "Mocked WebM output transcript"
+    mock_inference_client.return_value = mock_client_instance
+    
+    from app.services.transcription import transcription_service
+    
+    # Run the transcription service directly
+    res = transcription_service.transcribe_audio_bytes(
+        audio_bytes=b"fake webm bytes",
+        model_key="whisper-large",
+        hf_token="test_hf_token",
+        content_type="audio/webm",
+        filename="recording.webm"
+    )
+    
+    # Verify the output transcript matches
+    assert res == "Mocked WebM output transcript"
+    
+    # Verify client was constructed with Content-Type application/octet-stream
+    mock_inference_client.assert_called_once()
+    kwargs = mock_inference_client.call_args[1]
+    assert kwargs["headers"]["Content-Type"] == "application/octet-stream"

@@ -171,7 +171,7 @@ class NoteGeneratorService:
             
             logger.info(f"Connecting to: https://router.huggingface.co/v1/chat/completions (model: {model_id})")
             
-            # Retry loop with exponential backoff for 429 rate limit errors
+            # Retry loop with exponential backoff for rate limits, model loading, and transient network errors
             max_retries = 3
             backoff_factor = 2
             base_delay = 1.0  # seconds
@@ -186,23 +186,25 @@ class NoteGeneratorService:
                         temperature=0.1,  # Low temperature for deterministic clinical notes
                     )
                     break # Success!
-                except HfHubHTTPError as e:
-                    is_rate_limit = False
-                    if e.response is not None and e.response.status_code == 429:
-                        is_rate_limit = True
-                    elif "429" in str(e) or "too many requests" in str(e).lower() or "rate limit" in str(e).lower():
-                        is_rate_limit = True
+                except (HfHubHTTPError, Exception) as e:
+                    is_retryable = True
+                    # Check if it is a permanent auth/validation issue (400, 401, 403)
+                    if isinstance(e, HfHubHTTPError) and e.response is not None:
+                        if e.response.status_code in (400, 401, 403):
+                            is_retryable = False
+                    
+                    if isinstance(e, ValueError):
+                        is_retryable = False
                         
-                    if is_rate_limit and attempt < max_retries:
+                    if is_retryable and attempt < max_retries:
                         delay = base_delay * (backoff_factor ** attempt)
-                        logger.warning(f"Rate limit (429) hit during note generation. Retrying in {delay:.2f}s... (Attempt {attempt+1}/{max_retries})")
+                        logger.warning(f"[Backend] Retryable error hit during note generation: {e}. Retrying in {delay:.2f}s... (Attempt {attempt+1}/{max_retries})")
                         time.sleep(delay)
                     else:
                         raise e
-                except Exception as e:
-                    raise e
             
             raw_content = response.choices[0].message.content
+            logger.info(f"[Backend] Note generation successful. Response length: {len(raw_content)} characters.")
             
             if mode == "custom":
                 sanitized_content = self._sanitize_general_section(raw_content, transcript)
