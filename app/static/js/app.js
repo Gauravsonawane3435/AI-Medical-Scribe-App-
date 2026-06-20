@@ -53,6 +53,7 @@ const sectionPlan = document.getElementById("section-plan");
 const sectionPrescription = document.getElementById("section-prescription");
 const sectionRecommendedTests = document.getElementById("section-recommended-tests");
 const sectionFollowUp = document.getElementById("section-follow-up");
+const sectionCleanedTranscript = document.getElementById("section-cleaned-transcript");
 
 // Audio Upload Elements
 const dropZone = document.getElementById("drop-zone");
@@ -1025,6 +1026,9 @@ async function triggerNoteGeneration() {
     }
 
     // Set Loading State
+    if (sectionCleanedTranscript) sectionCleanedTranscript.value = "";
+    // Set Loading State
+    if (sectionCleanedTranscript) sectionCleanedTranscript.value = "";
     isGeneratingNote = true;
     updateGenerateButtonState();
     generateSpinner.classList.remove("hidden");
@@ -1067,9 +1071,15 @@ async function triggerNoteGeneration() {
         
         if (data.mode === "transcript") {
             sectionCustomOutput.value = data.transcript || "";
+            if (sectionCleanedTranscript) {
+                sectionCleanedTranscript.value = data.cleaned_transcript || "";
+            }
             showToast("Success", "Raw transcript processed successfully!", "success");
         } else if (data.mode === "custom") {
             sectionCustomOutput.value = data.output || "";
+            if (sectionCleanedTranscript) {
+                sectionCleanedTranscript.value = data.cleaned_transcript || "";
+            }
             showToast("Success", "Custom AI response generated successfully!", "success");
         } else {
             // Populating structured note fields
@@ -1081,6 +1091,12 @@ async function triggerNoteGeneration() {
             sectionPrescription.value = noteData.prescription || "";
             sectionRecommendedTests.value = noteData.recommended_tests || "";
             sectionFollowUp.value = noteData.follow_up || "";
+
+            // Populate cleaned transcript
+            if (sectionCleanedTranscript) {
+                sectionCleanedTranscript.value = data.cleaned_transcript || "";
+            }
+
             showToast("Success", "Structured clinical note generated successfully!", "success");
         }
     } catch (error) {

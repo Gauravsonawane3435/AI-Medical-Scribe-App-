@@ -38,6 +38,8 @@ class NoteGeneratorService:
                 "mode": "transcript",
                 "transcript": transcript
             }
+        
+        logger.info(f"[NoteGeneratorService] Received transcript for note generation. Length: {len(transcript)} characters.")
 
         token = hf_token or settings.HF_TOKEN
         is_demo = not token or token.strip().lower() in ("", "demo", "test", "mock", "none", "hf_demo")

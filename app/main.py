@@ -10,6 +10,8 @@ import os
 from app.config import settings, SUPPORTED_LLM_MODELS, SUPPORTED_ASR_MODELS
 from app.services.transcription import transcription_service
 from app.services.generator import note_generator_service
+from app.services.transcript_validator import transcript_validator_service
+from app.services.prescription_service import prescription_service
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -149,8 +151,20 @@ async def generate_note(request: NoteGenerationRequest):
         )
         
     try:
+        # Step 1: Run Transcript Cleanup & Validation
+        cleaned_transcript = transcript
+        try:
+            cleaned_transcript = transcript_validator_service.validate_and_clean(
+                raw_transcript=transcript,
+                model_key=request.model_key or "qwen",
+                hf_token=request.hf_token
+            )
+        except Exception as e:
+            logger.error(f"[Backend] Transcript validator failed: {e}. Using original transcript.")
+
+        # Step 2: Generate Clinical Note using Cleaned Transcript
         note_data = note_generator_service.generate_note(
-            transcript=transcript,
+            transcript=cleaned_transcript,
             model_key=request.model_key or "qwen",
             system_prompt=request.system_prompt,
             hf_token=request.hf_token,
@@ -162,27 +176,48 @@ async def generate_note(request: NoteGenerationRequest):
         if mode == "transcript":
             return {
                 "mode": "transcript",
-                "transcript": transcript
+                "transcript": transcript,
+                "cleaned_transcript": cleaned_transcript
             }
         elif mode == "custom":
             return {
                 "mode": "custom",
-                "output": note_data.get("custom_output", note_data.get("raw_note", ""))
+                "output": note_data.get("custom_output", note_data.get("raw_note", "")),
+                "cleaned_transcript": cleaned_transcript
             }
         else: # structured
+            # Step 3: Run Prescription Validation/Generation
+            prescription_json = {"medications": []}
+            try:
+                prescription_json = await prescription_service.extract_prescription_json(
+                    transcript=cleaned_transcript,
+                    note_data=note_data,
+                    model_key=request.model_key or "qwen",
+                    hf_token=request.hf_token
+                )
+            except Exception as e:
+                logger.error(f"[Backend] Prescription Service extraction failed: {e}.")
+
+            # Structured response elements
+            clinical_note = {
+                "chief_complaint": note_data.get("chief_complaint", ""),
+                "hpi": note_data.get("hpi", ""),
+                "assessment": note_data.get("assessment", ""),
+                "plan": note_data.get("plan", ""),
+                "prescription": note_data.get("prescription", ""),
+                "recommended_tests": note_data.get("recommended_tests", ""),
+                "follow_up": note_data.get("follow_up", ""),
+                "raw_note": note_data.get("raw_note", ""),
+                "model_used": note_data.get("model_used", "")
+            }
+
+            # Return combined backward-compatible structured response
             return {
                 "mode": "structured",
-                "data": {
-                    "chief_complaint": note_data.get("chief_complaint", ""),
-                    "hpi": note_data.get("hpi", ""),
-                    "assessment": note_data.get("assessment", ""),
-                    "plan": note_data.get("plan", ""),
-                    "prescription": note_data.get("prescription", ""),
-                    "recommended_tests": note_data.get("recommended_tests", ""),
-                    "follow_up": note_data.get("follow_up", ""),
-                    "raw_note": note_data.get("raw_note", ""),
-                    "model_used": note_data.get("model_used", "")
-                }
+                "cleaned_transcript": cleaned_transcript,
+                "data": clinical_note,
+                "clinical_note": clinical_note,
+                "prescription": prescription_json
             }
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
