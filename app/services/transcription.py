@@ -126,22 +126,35 @@ class TranscriptionService:
                 filename = "recording.wav"
                 logger.info("[Backend] Conversion successful. Updated parameters to WAV.")
             except Exception as e:
-                logger.warning(f"[Backend] Audio conversion to WAV failed: {e}. Falling back to raw audio upload mapped to application/octet-stream.")
-                mime_type = "application/octet-stream"
+                logger.warning(f"[Backend] Audio conversion to WAV failed: {e}. Falling back to raw audio upload with original MIME type.")
         
-        # Hugging Face serverless router rejects some non-standard audio MIME types (like audio/mp4, audio/m4a, audio/aac, audio/webm, audio/ogg).
-        # We map these to application/octet-stream to allow Whisper's backend to decode them from container headers.
+        # Guess/Map the best supported MIME type for Hugging Face compatibility.
+        # Hugging Face supports audio/webm, audio/webm;codecs=opus, audio/ogg, audio/wav, and audio/m4a.
+        # We only map truly unsupported types (like mp4, aac, caf) to m4a/wav, and guess if octet-stream is sent.
         hf_mime_type = mime_type
-        if mime_type in ("audio/mp4", "audio/m4a", "audio/aac", "audio/x-caf", "audio/caf", "audio/x-m4a") or "webm" in mime_type.lower() or "ogg" in mime_type.lower() or mime_type == "application/octet-stream":
-            hf_mime_type = "application/octet-stream"
-            logger.info(f"[Backend] Mapping MIME type '{mime_type}' to '{hf_mime_type}' for Hugging Face compatibility.")
+        if hf_mime_type == "application/octet-stream":
+            if filename and filename.lower().endswith(".webm"):
+                hf_mime_type = "audio/webm"
+            elif filename and filename.lower().endswith((".m4a", ".mp4")):
+                hf_mime_type = "audio/m4a"
+            elif filename and filename.lower().endswith(".ogg"):
+                hf_mime_type = "audio/ogg"
+            else:
+                hf_mime_type = "audio/wav"
+                
+        if hf_mime_type in ("audio/mp4", "audio/aac", "audio/caf", "audio/x-caf"):
+            hf_mime_type = "audio/m4a"
+            logger.info(f"[Backend] Mapping MIME type '{mime_type}' to '{hf_mime_type}' for Hugging Face routing compatibility.")
+        else:
+            logger.info(f"[Backend] Using MIME type '{hf_mime_type}' directly for Hugging Face routing.")
 
         try:
-            # Set the Content-Type header in the constructor to avoid None type rejection
+            # Set the Content-Type header and client timeout (60s) to support longer audio recordings
             client = InferenceClient(
                 token=token,
                 base_url="https://router.huggingface.co/hf-inference",
-                headers={"Content-Type": hf_mime_type}
+                headers={"Content-Type": hf_mime_type},
+                timeout=60.0
             )
             # Build full URL to bypass api-inference.huggingface.co DNS resolution error
             model_url = f"https://router.huggingface.co/hf-inference/models/{model_id}"

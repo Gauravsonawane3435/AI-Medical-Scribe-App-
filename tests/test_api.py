@@ -154,7 +154,7 @@ def test_webm_transcribe_fallback(mock_inference_client, mock_convert_wav):
     # Verify the output transcript matches
     assert res == "Mocked WebM output transcript"
     
-    # Verify client was constructed with Content-Type application/octet-stream
+    # Verify client was constructed with Content-Type audio/webm
     mock_inference_client.assert_called_once()
     kwargs = mock_inference_client.call_args[1]
-    assert kwargs["headers"]["Content-Type"] == "application/octet-stream"
+    assert kwargs["headers"]["Content-Type"] == "audio/webm"
