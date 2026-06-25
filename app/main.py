@@ -199,17 +199,22 @@ async def generate_note(request: NoteGenerationRequest):
                 logger.error(f"[Backend] Prescription Service extraction failed: {e}.")
 
             # Structured response elements
-            clinical_note = {
-                "chief_complaint": note_data.get("chief_complaint", ""),
-                "hpi": note_data.get("hpi", ""),
-                "assessment": note_data.get("assessment", ""),
-                "plan": note_data.get("plan", ""),
-                "prescription": note_data.get("prescription", ""),
-                "recommended_tests": note_data.get("recommended_tests", ""),
-                "follow_up": note_data.get("follow_up", ""),
-                "raw_note": note_data.get("raw_note", ""),
-                "model_used": note_data.get("model_used", "")
+            standard_keys = {
+                "chief_complaint", "hpi", "assessment", "plan", 
+                "prescription", "recommended_tests", "follow_up"
             }
+            
+            # Start with standard keys pre-populated
+            clinical_note = {key: note_data.get(key, "") for key in standard_keys}
+            
+            # Add metadata keys
+            clinical_note["raw_note"] = note_data.get("raw_note", "")
+            clinical_note["model_used"] = note_data.get("model_used", "")
+            
+            # Dynamically add any other custom sections returned by the generator
+            for key, val in note_data.items():
+                if key not in standard_keys and key not in {"raw_note", "model_used", "mode"}:
+                    clinical_note[key] = val
 
             # Return combined backward-compatible structured response
             return {

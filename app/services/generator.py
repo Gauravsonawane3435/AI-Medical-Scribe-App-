@@ -257,9 +257,34 @@ class NoteGeneratorService:
 
     def _parse_note_sections(self, raw_note: str) -> Dict[str, str]:
         """
-        Parses the raw clinical note into separate sections using regex patterns.
-        Supports standard and specialty templates.
+        Parses the raw clinical note into separate sections dynamically using header patterns.
+        Supports standard, specialty, and user-defined custom templates.
         """
+        lines = raw_note.split('\n')
+        header_lines = []
+        ignore_headers = {"date", "time", "doctor", "patient", "subject", "dear colleague", "sincerely", "note"}
+        
+        for idx, line in enumerate(lines):
+            line_stripped = line.strip()
+            if not line_stripped:
+                continue
+                
+            # Pattern 1: Header ending with colon, optionally with text after it.
+            # Excludes leading list bullet markers like '-' or '*'.
+            match1 = re.match(r'^(?:###|\*\*|#|\s)*([A-Z][a-zA-Z0-9\s/\-&()]{1,40})\s*:\s*(.*)$', line_stripped)
+            
+            # Pattern 2: Bold header without colon
+            match2 = None
+            if not match1:
+                match2 = re.match(r'^(?:###|\*\*)\s*([A-Z][a-zA-Z0-9\s/\-&()]{1,40})\s*(?:\*\*|#)?$', line_stripped)
+                
+            match = match1 or match2
+            if match:
+                header_name = match.group(1).strip()
+                if header_name.lower() not in ignore_headers and not header_name.islower():
+                    inline_content = match.group(2).strip() if (match1 and len(match.groups()) > 1 and match.group(2)) else ""
+                    header_lines.append((idx, header_name, inline_content))
+                    
         sections = {
             "chief_complaint": "",
             "hpi": "",
@@ -270,33 +295,46 @@ class NoteGeneratorService:
             "follow_up": ""
         }
         
-        # Define regex patterns for each section header, including fallbacks
-        patterns = {
-            "chief_complaint": r"(?:Chief Complaint|CC)\s*:\s*(.*?)(?=\n(?:HPI|History of Present Illness|Procedure|Obstetric History|Obstetric/gynecological history|Assessment|Findings|Plan|Recommendations|Prescription|Recommended Tests|Recommended Test|Follow-up|Follow Up)|$)",
-            "hpi": r"(?:HPI|History of Present Illness|Procedure|Obstetric History|Obstetric/gynecological history)\s*:\s*(.*?)(?=\n(?:Chief Complaint|CC|Assessment|Findings|Plan|Recommendations|Prescription|Recommended Tests|Recommended Test|Follow-up|Follow Up)|$)",
-            "assessment": r"(?:Assessment|Findings)\s*:\s*(.*?)(?=\n(?:Chief Complaint|CC|HPI|History of Present Illness|Procedure|Obstetric History|Obstetric/gynecological history|Plan|Recommendations|Prescription|Recommended Tests|Recommended Test|Follow-up|Follow Up)|$)",
-            "plan": r"(?:Plan|Recommendations)\s*:\s*(.*?)(?=\n(?:Chief Complaint|CC|HPI|History of Present Illness|Procedure|Obstetric History|Obstetric/gynecological history|Assessment|Findings|Prescription|Recommended Tests|Recommended Test|Follow-up|Follow Up)|$)",
-            "prescription": r"(?:Prescription)\s*:\s*(.*?)(?=\n(?:Chief Complaint|CC|HPI|History of Present Illness|Procedure|Obstetric History|Obstetric/gynecological history|Assessment|Findings|Plan|Recommendations|Recommended Tests|Recommended Test|Follow-up|Follow Up)|$)",
-            "recommended_tests": r"(?:Recommended Tests|Recommended Test)\s*:\s*(.*?)(?=\n(?:Chief Complaint|CC|HPI|History of Present Illness|Procedure|Obstetric History|Obstetric/gynecological history|Assessment|Findings|Plan|Recommendations|Prescription|Follow-up|Follow Up)|$)",
-            "follow_up": r"(?:Follow-up|Follow Up)\s*:\s*(.*?)(?=\n(?:Chief Complaint|CC|HPI|History of Present Illness|Procedure|Obstetric History|Obstetric/gynecological history|Assessment|Findings|Plan|Recommendations|Prescription|Recommended Tests|Recommended Test)|$)"
-        }
-        
-        # Clean up markdown headers if the model adds them (e.g. ### HPI: or **HPI:**)
-        cleaned_note = re.sub(r'^(?:###|\*\*|#)\s*', '', raw_note, flags=re.MULTILINE)
-        cleaned_note = re.sub(r'\s*\*\*\s*$', '', cleaned_note, flags=re.MULTILINE)
-        
-        for key, pattern in patterns.items():
-            match = re.search(pattern, cleaned_note, re.DOTALL | re.IGNORECASE)
-            if match:
-                sections[key] = match.group(1).strip()
-            else:
-                # Fallback: search for header without colon
-                fallback_pattern = pattern.replace(r"\s*:\s*", r"\s*:?\s*")
-                fallback_match = re.search(fallback_pattern, cleaned_note, re.DOTALL | re.IGNORECASE)
-                if fallback_match:
-                    sections[key] = fallback_match.group(1).strip()
+        if not header_lines:
+            # Fallback if no headers were detected: return empty standard sections
+            return sections
+            
+        for i in range(len(header_lines)):
+            idx, header_name, inline_content = header_lines[i]
+            start_line_idx = idx + 1
+            end_line_idx = header_lines[i+1][0] if i + 1 < len(header_lines) else len(lines)
+            
+            content_lines = lines[start_line_idx:end_line_idx]
+            content = "\n".join(content_lines).strip()
+            
+            full_content = inline_content
+            if content:
+                if full_content:
+                    full_content += "\n" + content
                 else:
-                    sections[key] = ""
+                    full_content = content
+                    
+            header_key = re.sub(r'[\s/\-&()]+', '_', header_name.strip()).lower().strip('_')
+            sections[header_key] = full_content
+            
+        # Ensure backward compatibility by mapping synonymous keys to standard keys if empty
+        if not sections.get("hpi"):
+            for key in ["procedure", "obstetric_history", "obstetric_gynecological_history", "history_of_present_illness"]:
+                if sections.get(key):
+                    sections["hpi"] = sections[key]
+                    break
+                    
+        if not sections.get("assessment"):
+            for key in ["findings", "clinical_impression", "impression", "diagnosis"]:
+                if sections.get(key):
+                    sections["assessment"] = sections[key]
+                    break
+                    
+        if not sections.get("plan"):
+            for key in ["recommendations", "treatment", "management_plan"]:
+                if sections.get(key):
+                    sections["plan"] = sections[key]
+                    break
                     
         return sections
 
@@ -356,8 +394,9 @@ class NoteGeneratorService:
             # Lab tests
             "cbc", "bmp", "ekg", "ecg", "ultrasound", "mri", "ct", "lipid", "x-ray", "labs", 
             "laboratory", "urine", "pathology", "coagulation", "hepatic", "prenatal",
-            # Allergies / history
-            "allergy", "allergies", "history",
+            # Allergies / history / surgeries / procedures
+            "allergy", "allergies", "history", "cholecystectomy", "appendectomy", "tonsillectomy",
+            "surgery", "surgeries", "surgical", "operation", "procedure", "procedures",
             # Vital signs keywords
             "bp", "blood", "pressure", "temp", "temperature", "pulse", "heartbeat", "respiration", "oxygen"
         }
@@ -673,9 +712,9 @@ class NoteGeneratorService:
                     blocks.append(block)
                 sections["prescription"] = "\n\n".join(blocks)
                 
-        # Sanitize all other general sections
-        for section_name in ["chief_complaint", "hpi", "assessment", "plan", "recommended_tests", "follow_up"]:
-            if section_name in sections:
+        # Sanitize all other general sections dynamically (excluding prescription)
+        for section_name in sections.keys():
+            if section_name != "prescription":
                 sections[section_name] = self._sanitize_general_section(sections[section_name], transcript)
                 
         return sections
